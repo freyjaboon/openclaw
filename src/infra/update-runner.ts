@@ -411,32 +411,47 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         }
       }
 
-      const upstreamStep = await runStep(
+      // Check if 'upstream' remote exists (for fork-based workflow)
+      // Falls back to origin tracking branch if no upstream remote
+      const upstreamRemoteStep = await runStep(
         step(
-          "upstream check",
-          [
-            "git",
-            "-C",
-            gitRoot,
-            "rev-parse",
-            "--abbrev-ref",
-            "--symbolic-full-name",
-            "@{upstream}",
-          ],
+          "upstream remote check",
+          ["git", "-C", gitRoot, "remote", "get-url", "upstream"],
           gitRoot,
         ),
       );
-      steps.push(upstreamStep);
-      if (upstreamStep.exitCode !== 0) {
-        return {
-          status: "skipped",
-          mode: "git",
-          root: gitRoot,
-          reason: "no-upstream",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+      steps.push(upstreamRemoteStep);
+      const hasUpstreamRemote = upstreamRemoteStep.exitCode === 0;
+
+      // If no upstream remote, check for origin tracking branch (original behavior)
+      if (!hasUpstreamRemote) {
+        const originTrackingStep = await runStep(
+          step(
+            "origin tracking check",
+            [
+              "git",
+              "-C",
+              gitRoot,
+              "rev-parse",
+              "--abbrev-ref",
+              "--symbolic-full-name",
+              "@{upstream}",
+            ],
+            gitRoot,
+          ),
+        );
+        steps.push(originTrackingStep);
+        if (originTrackingStep.exitCode !== 0) {
+          return {
+            status: "skipped",
+            mode: "git",
+            root: gitRoot,
+            reason: "no-upstream",
+            before: { sha: beforeSha, version: beforeVersion },
+            steps,
+            durationMs: Date.now() - startedAt,
+          };
+        }
       }
 
       const fetchStep = await runStep(
@@ -444,10 +459,12 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       );
       steps.push(fetchStep);
 
+      // Use upstream/main if upstream remote exists, otherwise fall back to @{upstream}
+      const upstreamRef = hasUpstreamRemote ? "upstream/main" : "@{upstream}";
       const upstreamShaStep = await runStep(
         step(
-          "git rev-parse @{upstream}",
-          ["git", "-C", gitRoot, "rev-parse", "@{upstream}"],
+          `git rev-parse ${upstreamRef}`,
+          ["git", "-C", gitRoot, "rev-parse", upstreamRef],
           gitRoot,
         ),
       );
